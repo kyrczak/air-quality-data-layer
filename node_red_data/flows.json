@@ -8,48 +8,103 @@
         "env": []
     },
     {
-        "id": "56f74d9cfe9b56f0",
+        "id": "airly_inject_node",
         "type": "inject",
         "z": "8e4023b8523e3808",
-        "name": "",
+        "name": "Co 15 minut",
         "props": [
             {
                 "p": "payload"
-            },
-            {
-                "p": "topic",
-                "vt": "str"
             }
         ],
-        "repeat": "",
+        "repeat": "900",
         "crontab": "",
-        "once": false,
+        "once": true,
         "onceDelay": 0.1,
         "topic": "",
         "payload": "",
         "payloadType": "date",
-        "x": 180,
-        "y": 120,
+        "x": 260,
+        "y": 260,
         "wires": [
             [
-                "ee43387b42365c63"
+                "b480c5eacecfc23b"
             ]
         ]
     },
     {
-        "id": "ee43387b42365c63",
+        "id": "airly_http_request",
+        "type": "http request",
+        "z": "8e4023b8523e3808",
+        "name": "Pobierz dane z Airly",
+        "method": "GET",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "https://airapi.airly.eu/v2/measurements/installation?installationId=119289",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [
+            {
+                "keyType": "other",
+                "keyValue": "Accept",
+                "valueType": "other",
+                "valueValue": "application/json"
+            }
+        ],
+        "x": 620,
+        "y": 340,
+        "wires": [
+            [
+                "airly_debug"
+            ]
+        ]
+    },
+    {
+        "id": "airly_debug",
         "type": "debug",
         "z": "8e4023b8523e3808",
-        "name": "debug 1",
+        "name": "Pokaż odpowiedź",
         "active": true,
         "tosidebar": true,
         "console": false,
         "tostatus": false,
-        "complete": "false",
+        "complete": "payload",
+        "targetType": "msg",
         "statusVal": "",
         "statusType": "auto",
-        "x": 420,
-        "y": 120,
+        "x": 830,
+        "y": 260,
         "wires": []
+    },
+    {
+        "id": "b480c5eacecfc23b",
+        "type": "change",
+        "z": "8e4023b8523e3808",
+        "name": "",
+        "rules": [
+            {
+                "t": "set",
+                "p": "headers.apikey",
+                "pt": "msg",
+                "to": "AIRLY_API_KEY",
+                "tot": "env"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 430,
+        "y": 340,
+        "wires": [
+            [
+                "airly_http_request"
+            ]
+        ]
     }
 ]

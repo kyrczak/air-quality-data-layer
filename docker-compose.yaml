@@ -7,6 +7,26 @@ services:
     volumes:
       - ./node_red_data:/data
     restart: unless-stopped
+    env_file:
+      - .env
+  
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    env_file:
+      - .env # POSTGRES_USER, POSTGRES_PASSWORD & POSTGRES_DB source
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres_data:/var/lib/postgressql/data
+    restart: unless-stopped
 
-volumes:
-  node_red_data:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672" # AMQP communication port
+      - "15672:15672" # UI management interface
+    volumes:
+      - ./rabbitmq_data:/var/lib/rabbitmq
+    restart: unless-stopped
