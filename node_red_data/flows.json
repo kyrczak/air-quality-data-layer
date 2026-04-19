@@ -8,7 +8,42 @@
         "env": []
     },
     {
-        "id": "airly_inject_node",
+        "id": "68089472e32982a5",
+        "type": "postgreSQLConfig",
+        "name": "",
+        "host": "postgres",
+        "hostFieldType": "str",
+        "port": 5432,
+        "portFieldType": "num",
+        "database": "airly_data",
+        "databaseFieldType": "str",
+        "ssl": "false",
+        "sslFieldType": "bool",
+        "applicationName": "",
+        "applicationNameType": "str",
+        "max": 10,
+        "maxFieldType": "num",
+        "idle": 1000,
+        "idleFieldType": "num",
+        "connectionTimeout": 10000,
+        "connectionTimeoutFieldType": "num",
+        "user": "admin",
+        "userFieldType": "str",
+        "password": "12345678",
+        "passwordFieldType": "str"
+    },
+    {
+        "id": "3537428dc4eb99d3",
+        "type": "amqp-broker",
+        "name": "rabbitmq",
+        "host": "rabbitmq",
+        "port": 5672,
+        "vhost": "",
+        "tls": false,
+        "credsFromSettings": false
+    },
+    {
+        "id": "trigger_15min",
         "type": "inject",
         "z": "8e4023b8523e3808",
         "name": "Co 15 minut",
@@ -24,23 +59,121 @@
         "topic": "",
         "payload": "",
         "payloadType": "date",
-        "x": 260,
-        "y": 260,
+        "x": 200,
+        "y": 440,
         "wires": [
             [
-                "b480c5eacecfc23b"
+                "define_stations"
             ]
         ]
     },
     {
-        "id": "airly_http_request",
+        "id": "define_stations",
+        "type": "function",
+        "z": "8e4023b8523e3808",
+        "name": "Lista 8 stacji (ID)",
+        "func": "// Wpisz tutaj ID swoich 8 stacji z Airly\nmsg.payload = [\n    119289, \n    86755, \n    116567, \n    87152, \n    37, \n    86758, \n    3426, \n    86788\n];\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 430,
+        "y": 520,
+        "wires": [
+            [
+                "split_array"
+            ]
+        ]
+    },
+    {
+        "id": "split_array",
+        "type": "split",
+        "z": "8e4023b8523e3808",
+        "name": "Rozdziel na pojedyncze ID",
+        "splt": "\\n",
+        "spltType": "str",
+        "arraySplt": 1,
+        "arraySpltType": "len",
+        "stream": false,
+        "addname": "",
+        "x": 680,
+        "y": 460,
+        "wires": [
+            [
+                "rate_limit"
+            ]
+        ]
+    },
+    {
+        "id": "rate_limit",
+        "type": "delay",
+        "z": "8e4023b8523e3808",
+        "name": "Odstęp 2 sekundy",
+        "pauseType": "rate",
+        "timeout": "5",
+        "timeoutUnits": "seconds",
+        "rate": "1",
+        "nbRateUnits": "2",
+        "rateUnits": "second",
+        "randomFirst": "1",
+        "randomLast": "5",
+        "randomUnits": "seconds",
+        "drop": false,
+        "allowrate": false,
+        "outputs": 1,
+        "x": 970,
+        "y": 460,
+        "wires": [
+            [
+                "set_headers"
+            ]
+        ]
+    },
+    {
+        "id": "set_headers",
+        "type": "change",
+        "z": "8e4023b8523e3808",
+        "name": "Zaciągnij Klucz z .env",
+        "rules": [
+            {
+                "t": "set",
+                "p": "headers.apikey",
+                "pt": "msg",
+                "to": "AIRLY_API_KEY",
+                "tot": "env"
+            },
+            {
+                "t": "set",
+                "p": "station_id",
+                "pt": "msg",
+                "to": "payload",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 480,
+        "y": 620,
+        "wires": [
+            [
+                "fetch_airly"
+            ]
+        ]
+    },
+    {
+        "id": "fetch_airly",
         "type": "http request",
         "z": "8e4023b8523e3808",
-        "name": "Pobierz dane z Airly",
+        "name": "Pobierz stację z API",
         "method": "GET",
         "ret": "obj",
         "paytoqs": "ignore",
-        "url": "https://airapi.airly.eu/v2/measurements/installation?installationId=119289",
+        "url": "https://airapi.airly.eu/v2/measurements/installation?installationId={{{payload}}}",
         "tls": "",
         "persist": false,
         "proxy": "",
@@ -55,19 +188,227 @@
                 "valueValue": "application/json"
             }
         ],
-        "x": 620,
-        "y": 340,
+        "x": 740,
+        "y": 620,
         "wires": [
             [
-                "airly_debug"
+                "debug_results",
+                "parser_node"
             ]
         ]
     },
     {
-        "id": "airly_debug",
+        "id": "debug_results",
         "type": "debug",
         "z": "8e4023b8523e3808",
-        "name": "Pokaż odpowiedź",
+        "name": "Wynik (JSON)",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1020,
+        "y": 620,
+        "wires": []
+    },
+    {
+        "id": "parser_node",
+        "type": "function",
+        "z": "8e4023b8523e3808",
+        "name": "Parser: Airly -> SQL/Rabbit",
+        "func": "if (!msg.payload || !msg.payload.current) return null;\n\nlet current = msg.payload.current.values;\nlet forecast = msg.payload.forecast || [];\nlet stationId = msg.station_id || \"unknown\";\nlet timestamp = msg.payload.current.tillDateTime;\n\n// Wyciąganie bieżących wartości\nlet data = {};\ncurrent.forEach(v => {\n    data[v.name] = v.value;\n});\n\n// --- WYJŚCIE 1: Dla PostgreSQL (Tylko czyste fakty, bez prognoz) ---\nlet msgSQL = {\n    query: \"INSERT INTO airly_readings (station_id, measurement_time, pm1, pm25, pm10, temperature, humidity) VALUES ($1, $2, $3, $4, $5, $6, $7);\",\n    params: [\n        stationId,\n        timestamp,\n        data[\"PM1\"] || null,\n        data[\"PM25\"] || null,\n        data[\"PM10\"] || null,\n        data[\"TEMPERATURE\"] || null,\n        data[\"HUMIDITY\"] || null\n    ]\n};\n\n// --- WYJŚCIE 2: Dla RabbitMQ (Pełen kontekst dla systemu RAG) ---\nlet msgRabbit = {\n    payload: {\n        station: stationId,\n        time: timestamp,\n        current_values: data,    \n        forecast: forecast      \n    },\n    routingKey: \"telemetry.airly.station_\" + stationId\n};\n\nreturn [msgSQL, msgRabbit];",
+        "outputs": 2,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1020,
+        "y": 700,
+        "wires": [
+            [
+                "postgres_node"
+            ],
+            [
+                "rabbit_node"
+            ]
+        ]
+    },
+    {
+        "id": "postgres_node",
+        "type": "postgresql",
+        "z": "8e4023b8523e3808",
+        "name": "DB: airly_readings",
+        "query": "",
+        "postgreSQLConfig": "68089472e32982a5",
+        "split": false,
+        "rowsPerMsg": "",
+        "outputs": 1,
+        "x": 1770,
+        "y": 720,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "rabbit_node",
+        "type": "amqp-out",
+        "z": "8e4023b8523e3808",
+        "name": "Queue: sensor_data",
+        "broker": "3537428dc4eb99d3",
+        "exchangeName": "sensor_data",
+        "exchangeType": "topic",
+        "exchangeRoutingKey": "routingKey",
+        "exchangeRoutingKeyType": "msg",
+        "exchangeDurable": false,
+        "amqpProperties": "{   \"contentType\": \"application/json\",   \"deliveryMode\": 2 }",
+        "rpcTimeoutMilliseconds": "",
+        "outputs": 0,
+        "x": 1540,
+        "y": 800,
+        "wires": []
+    },
+    {
+        "id": "mock_airly_data",
+        "type": "inject",
+        "z": "8e4023b8523e3808",
+        "name": "🔥 AWARYJNY INJECT (Mock API)",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "station_id",
+                "v": "99999",
+                "vt": "num"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "{\"current\":{\"tillDateTime\":\"2026-04-19T22:00:00.000Z\",\"values\":[{\"name\":\"PM1\",\"value\":12.5},{\"name\":\"PM25\",\"value\":18.2},{\"name\":\"PM10\",\"value\":22.4},{\"name\":\"TEMPERATURE\",\"value\":8.5},{\"name\":\"HUMIDITY\",\"value\":65.0}]},\"forecast\":[{\"tillDateTime\":\"2026-04-20T00:00:00.000Z\",\"values\":[{\"name\":\"PM10\",\"value\":15.0}]}]}",
+        "payloadType": "json",
+        "x": 520,
+        "y": 780,
+        "wires": [
+            [
+                "parser_node"
+            ]
+        ]
+    },
+    {
+        "id": "amqp_in_node",
+        "type": "amqp-in",
+        "z": "8e4023b8523e3808",
+        "name": "Odbierz z RabbitMQ",
+        "broker": "3537428dc4eb99d3",
+        "prefetch": "1",
+        "noAck": false,
+        "exchangeName": "",
+        "exchangeType": "topic",
+        "exchangeRoutingKey": "",
+        "exchangeDurable": true,
+        "queueName": "qdrant_vectorization_pipeline",
+        "queueExclusive": false,
+        "queueDurable": true,
+        "queueAutoDelete": false,
+        "headers": "{}",
+        "x": 310,
+        "y": 920,
+        "wires": [
+            [
+                "prepare_ollama"
+            ]
+        ]
+    },
+    {
+        "id": "prepare_ollama",
+        "type": "function",
+        "z": "8e4023b8523e3808",
+        "name": "Przygotuj Tekst dla AI",
+        "func": "// Upewniamy się, że payload to obiekt\nlet data = typeof msg.payload === 'string' ? JSON.parse(msg.payload) : msg.payload;\n\n// Tworzymy opis tekstowy dla modelu AI (to ten tekst zostanie zamieniony na wektor!)\nlet vals = data.current_values || {};\nlet textPrompt = `Pomiar jakości powietrza. Stacja: ${data.station}, Czas: ${data.time}. ` +\n                 `PM10 wynosi ${vals.PM10 || 'brak'}, PM2.5 wynosi ${vals.PM25 || 'brak'}, ` +\n                 `Temperatura to ${vals.TEMPERATURE || 'brak'}°C.`;\n\n// Zapisujemy oryginalne dane z Airly (w tym prognozy) na boku, aby ich nie stracić\nmsg.airly_metadata = data;\n\n// Ustawiamy payload dla zapytania do Ollamy\nmsg.payload = {\n    \"model\": \"nomic-embed-text\",\n    \"prompt\": textPrompt\n};\n\nreturn msg;",
+        "outputs": 1,
+        "x": 540,
+        "y": 920,
+        "wires": [
+            [
+                "call_ollama"
+            ]
+        ]
+    },
+    {
+        "id": "call_ollama",
+        "type": "http request",
+        "z": "8e4023b8523e3808",
+        "name": "Wektoryzuj w Ollama",
+        "method": "POST",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "http://ollama:11434/api/embeddings",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [],
+        "x": 760,
+        "y": 920,
+        "wires": [
+            [
+                "prepare_qdrant"
+            ]
+        ]
+    },
+    {
+        "id": "prepare_qdrant",
+        "type": "function",
+        "z": "8e4023b8523e3808",
+        "name": "Przygotuj Paczkę (Qdrant)",
+        "func": "// Pobieramy wygenerowany wektor z odpowiedzi Ollamy\nlet vector = msg.payload.embedding;\n\n// Prosty generator unikalnego ID (UUID) dla punktu w bazie wektorowej\nfunction uuidv4() {\n  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {\n    var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);\n    return v.toString(16);\n  });\n}\n\n// Budujemy ostateczny payload dla bazy Qdrant\nmsg.payload = {\n    \"points\": [\n        {\n            \"id\": uuidv4(),\n            \"vector\": vector,\n            \"payload\": msg.airly_metadata // Zapisujemy oryginalny JSON jako metadane!\n        }\n    ]\n};\n\nreturn msg;",
+        "outputs": 1,
+        "x": 990,
+        "y": 920,
+        "wires": [
+            [
+                "call_qdrant"
+            ]
+        ]
+    },
+    {
+        "id": "call_qdrant",
+        "type": "http request",
+        "z": "8e4023b8523e3808",
+        "name": "Zapisz w Qdrant",
+        "method": "PUT",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "http://qdrant:6333/collections/airly_readings/points",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [],
+        "x": 1210,
+        "y": 920,
+        "wires": [
+            [
+                "debug_success"
+            ]
+        ]
+    },
+    {
+        "id": "debug_success",
+        "type": "debug",
+        "z": "8e4023b8523e3808",
+        "name": "Sukces!",
         "active": true,
         "tosidebar": true,
         "console": false,
@@ -76,35 +417,8 @@
         "targetType": "msg",
         "statusVal": "",
         "statusType": "auto",
-        "x": 830,
-        "y": 260,
+        "x": 1380,
+        "y": 920,
         "wires": []
-    },
-    {
-        "id": "b480c5eacecfc23b",
-        "type": "change",
-        "z": "8e4023b8523e3808",
-        "name": "",
-        "rules": [
-            {
-                "t": "set",
-                "p": "headers.apikey",
-                "pt": "msg",
-                "to": "AIRLY_API_KEY",
-                "tot": "env"
-            }
-        ],
-        "action": "",
-        "property": "",
-        "from": "",
-        "to": "",
-        "reg": false,
-        "x": 430,
-        "y": 340,
-        "wires": [
-            [
-                "airly_http_request"
-            ]
-        ]
     }
 ]

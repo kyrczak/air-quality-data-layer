@@ -1,4 +1,47 @@
 services:
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    env_file:
+      - .env # POSTGRES_USER, POSTGRES_PASSWORD & POSTGRES_DB source
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    hostname: rabbitmq-server
+    ports:
+      - "5672:5672" # AMQP communication port
+      - "15672:15672" # UI management interface
+    volumes:
+      - ./rabbitmq_data:/var/lib/rabbitmq
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - ./qdrant_data:/qdrant/storage
+    restart: unless-stopped
+  
+  ollama:
+    image: ollama/ollama:rocm
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama_data:/root/.ollama
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    restart: unless-stopped
+
   node-red:
     image: nodered/node-red:latest
     container_name: node-red
@@ -9,24 +52,8 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-  
-  postgres:
-    image: postgres:15
-    container_name: postgres
-    env_file:
-      - .env # POSTGRES_USER, POSTGRES_PASSWORD & POSTGRES_DB source
-    ports:
-      - "5432:5432"
-    volumes:
-      - ./postgres_data:/var/lib/postgressql/data
-    restart: unless-stopped
-
-  rabbitmq:
-    image: rabbitmq:3-management
-    container_name: rabbitmq
-    ports:
-      - "5672:5672" # AMQP communication port
-      - "15672:15672" # UI management interface
-    volumes:
-      - ./rabbitmq_data:/var/lib/rabbitmq
-    restart: unless-stopped
+    depends_on:
+      - postgres
+      - rabbitmq
+      - qdrant
+      - ollama

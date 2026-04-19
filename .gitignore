@@ -1,7 +1,13 @@
-# Ignore environment variables
+# 1. Ignore environment variables (Security)
 .env
 
-# Ignore Node-RED local data folder
+# 2. Ignore Database & AI Volumes (Massive binaries and data)
+postgres_data/
+qdrant_data/
+ollama_data/
+rabbitmq_data/
+
+# 3. Ignore Node-RED local data folder (Keep flows, ignore modules/credentials)
 node_red_data/node_modules/
 node_red_data/.sessions.json
 node_red_data/.config.*
@@ -9,6 +15,10 @@ node_red_data/.npm/*
 node_red_data/package-lock.json
 node_red_data/.flows*
 node_red_data/flows_cred.json
+node_red_data/lib/
 
-# Ignore RabbitMQ local data folder
-rabbitmq_data
+# 4. General OS and IDE generated files (Best practice)
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
