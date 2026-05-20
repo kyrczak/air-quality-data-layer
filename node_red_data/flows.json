@@ -52,7 +52,7 @@
                 "p": "payload"
             }
         ],
-        "repeat": "900",
+        "repeat": "2400",
         "crontab": "",
         "once": true,
         "onceDelay": 0.1,
@@ -202,7 +202,7 @@
         "type": "debug",
         "z": "8e4023b8523e3808",
         "name": "Wynik (JSON)",
-        "active": false,
+        "active": true,
         "tosidebar": true,
         "console": false,
         "tostatus": false,
@@ -233,7 +233,8 @@
                 "postgres_node"
             ],
             [
-                "rabbit_node"
+                "rabbit_node",
+                "7102edbe3c72b980"
             ]
         ]
     },
@@ -263,7 +264,7 @@
         "exchangeType": "topic",
         "exchangeRoutingKey": "routingKey",
         "exchangeRoutingKeyType": "msg",
-        "exchangeDurable": false,
+        "exchangeDurable": true,
         "amqpProperties": "{   \"contentType\": \"application/json\",   \"deliveryMode\": 2 }",
         "rpcTimeoutMilliseconds": "",
         "outputs": 0,
@@ -419,6 +420,23 @@
         "statusType": "auto",
         "x": 1380,
         "y": 920,
+        "wires": []
+    },
+    {
+        "id": "7102edbe3c72b980",
+        "type": "debug",
+        "z": "8e4023b8523e3808",
+        "name": "debug 1",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1200,
+        "y": 820,
         "wires": []
     }
 ]
