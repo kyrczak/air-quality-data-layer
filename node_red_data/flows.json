@@ -202,7 +202,7 @@
         "type": "debug",
         "z": "8e4023b8523e3808",
         "name": "Wynik (JSON)",
-        "active": true,
+        "active": false,
         "tosidebar": true,
         "console": false,
         "tostatus": false,
@@ -332,8 +332,13 @@
         "type": "function",
         "z": "8e4023b8523e3808",
         "name": "Przygotuj Tekst dla AI",
-        "func": "// Upewniamy się, że payload to obiekt\nlet data = typeof msg.payload === 'string' ? JSON.parse(msg.payload) : msg.payload;\n\n// Tworzymy opis tekstowy dla modelu AI (to ten tekst zostanie zamieniony na wektor!)\nlet vals = data.current_values || {};\nlet textPrompt = `Pomiar jakości powietrza. Stacja: ${data.station}, Czas: ${data.time}. ` +\n                 `PM10 wynosi ${vals.PM10 || 'brak'}, PM2.5 wynosi ${vals.PM25 || 'brak'}, ` +\n                 `Temperatura to ${vals.TEMPERATURE || 'brak'}°C.`;\n\n// Zapisujemy oryginalne dane z Airly (w tym prognozy) na boku, aby ich nie stracić\nmsg.airly_metadata = data;\n\n// Ustawiamy payload dla zapytania do Ollamy\nmsg.payload = {\n    \"model\": \"nomic-embed-text\",\n    \"prompt\": textPrompt\n};\n\nreturn msg;",
+        "func": "// 1. Zabezpieczenie formatu wejściowego\nlet data = typeof msg.payload === 'string' ? JSON.parse(msg.payload) : msg.payload;\nlet current = data.current_values || {};\nlet forecast = data.forecast || [];\nlet station = data.station || \"nieznana\";\nlet time = new Date(data.time).toLocaleString('pl-PL');\n\nlet pm10_current = current.PM10 || 0;\n\n// 2. KLASYFIKACJA (Tłumaczymy liczby na pojęcia dla LLM)\nlet status = \"\";\nlet health_advice = \"\";\n\nif (pm10_current <= 20) {\n    status = \"BARDZO DOBRY\";\n    health_advice = \"Są to idealne warunki do wietrzenia pomieszczeń oraz intensywnego biegania na zewnątrz.\";\n} else if (pm10_current <= 50) {\n    status = \"UMIARKOWANY\";\n    health_advice = \"Można krótko przewietrzyć pokój, ale zaleca się ograniczenie ciężkiego wysiłku fizycznego.\";\n} else {\n    status = \"ZŁY (SMOG)\";\n    health_advice = \"KATEGORYCZNY ZAKAZ wietrzenia mieszkań i uprawiania sportu na zewnątrz. Ryzyko dla zdrowia.\";\n}\n\n// 3. ANALIZA PROGNOZ (Szukamy najlepszego momentu)\nlet best_time = \"brak danych\";\nlet min_pm10 = 9999;\nlet trend = \"stabilny\";\n\nif (forecast.length > 0) {\n    // Przeszukujemy prognozę, by znaleźć godzinę z najniższym stężeniem pyłów\n    forecast.forEach(f => {\n        // Airly trzyma wartości w tablicy obiektów, szukamy PM10\n        let f_pm10_obj = f.values.find(v => v.name === \"PM10\");\n        if (f_pm10_obj && f_pm10_obj.value < min_pm10) {\n            min_pm10 = f_pm10_obj.value;\n            // Formatujemy czas prognozy na czytelny np. \"20:00\"\n            best_time = new Date(f.tillDateTime).toLocaleTimeString('pl-PL', {hour: '2-digit', minute:'2-digit'});\n        }\n    });\n    \n    // Obliczamy prosty trend (porównanie obecnego z najlepszym w przyszłości)\n    if (min_pm10 < (pm10_current - 5)) trend = \"POLEPSZAJĄCY (powietrze będzie czystsze)\";\n    else if (min_pm10 > (pm10_current + 5)) trend = \"POGARSZAJĄCY (idzie smog)\";\n}\n\n// 4. GENEROWANIE NARRACJI (To jest to, co przeczyta Nomic i Llama!)\nlet textPrompt = `Raport o jakości powietrza dla okolicy stacji ${station}. Stan na: ${time}. ` +\n                 `Obecny poziom pyłów PM10 wynosi ${pm10_current} µg/m³. ` +\n                 `Klasyfikacja: Stan powietrza jest ${status}. ${health_advice} ` +\n                 `Analiza trendu: Trend jakości powietrza jest ${trend}. ` +\n                 `Wnioski z prognozy: Najlepszy czas na przewietrzenie pokoju lub wyjście pobiegać to godzina ${best_time}, ` +\n                 `kiedy przewiduje się, że poziom PM10 spadnie do wartości ${min_pm10} µg/m³.`;\n\n// 5. Pakowanie do Qdranta i Ollamy\nmsg.airly_metadata = {\n       \"station\": station,\n       \"time\": time,\n       \"narrative\": textPrompt, \n       \"raw_data\": data\n};\nmsg.payload = {\n    \"model\": \"nomic-embed-text\",\n    \"prompt\": textPrompt\n};\n\nreturn msg;",
         "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
         "x": 540,
         "y": 920,
         "wires": [
@@ -373,6 +378,11 @@
         "name": "Przygotuj Paczkę (Qdrant)",
         "func": "// Pobieramy wygenerowany wektor z odpowiedzi Ollamy\nlet vector = msg.payload.embedding;\n\n// Prosty generator unikalnego ID (UUID) dla punktu w bazie wektorowej\nfunction uuidv4() {\n  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {\n    var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);\n    return v.toString(16);\n  });\n}\n\n// Budujemy ostateczny payload dla bazy Qdrant\nmsg.payload = {\n    \"points\": [\n        {\n            \"id\": uuidv4(),\n            \"vector\": vector,\n            \"payload\": msg.airly_metadata // Zapisujemy oryginalny JSON jako metadane!\n        }\n    ]\n};\n\nreturn msg;",
         "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
         "x": 990,
         "y": 920,
         "wires": [
@@ -427,7 +437,7 @@
         "type": "debug",
         "z": "8e4023b8523e3808",
         "name": "debug 1",
-        "active": false,
+        "active": true,
         "tosidebar": true,
         "console": false,
         "tostatus": false,
@@ -437,6 +447,161 @@
         "statusType": "auto",
         "x": 1200,
         "y": 820,
+        "wires": []
+    },
+    {
+        "id": "rag_inject",
+        "type": "inject",
+        "z": "8e4023b8523e3808",
+        "name": "Zadaj Pytanie",
+        "props": [
+            {
+                "p": "question",
+                "v": "Kiedy dzisiaj najlepiej iść biegać?",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 230,
+        "y": 1060,
+        "wires": [
+            [
+                "rag_prepare_embed"
+            ]
+        ]
+    },
+    {
+        "id": "rag_prepare_embed",
+        "type": "function",
+        "z": "8e4023b8523e3808",
+        "name": "Przygotuj do Wektoryzacji",
+        "func": "// Bierzemy pytanie i zlecamy Ollamie zamianę go na wektor\nmsg.payload = {\n    \"model\": \"nomic-embed-text\",\n    \"prompt\": msg.question\n};\nreturn msg;",
+        "outputs": 1,
+        "x": 430,
+        "y": 1060,
+        "wires": [
+            [
+                "rag_embed_question"
+            ]
+        ]
+    },
+    {
+        "id": "rag_embed_question",
+        "type": "http request",
+        "z": "8e4023b8523e3808",
+        "name": "Wektoryzuj Pytanie",
+        "method": "POST",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "http://ollama:11434/api/embeddings",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "authType": "",
+        "x": 650,
+        "y": 1060,
+        "wires": [
+            [
+                "rag_prepare_search"
+            ]
+        ]
+    },
+    {
+        "id": "rag_prepare_search",
+        "type": "function",
+        "z": "8e4023b8523e3808",
+        "name": "Sformułuj Zapytanie Qdrant",
+        "func": "// Bierzemy wektor naszego pytania i prosimy Qdranta o 1 najbardziej podobny wpis\nmsg.payload = {\n    \"vector\": msg.payload.embedding,\n    \"limit\": 1,\n    \"with_payload\": true\n};\nreturn msg;",
+        "outputs": 1,
+        "x": 860,
+        "y": 1060,
+        "wires": [
+            [
+                "rag_search_qdrant"
+            ]
+        ]
+    },
+    {
+        "id": "rag_search_qdrant",
+        "type": "http request",
+        "z": "8e4023b8523e3808",
+        "name": "Szukaj w Bazie",
+        "method": "POST",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "http://qdrant:6333/collections/airly_readings/points/search",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "authType": "",
+        "x": 1060,
+        "y": 1060,
+        "wires": [
+            [
+                "rag_build_prompt"
+            ]
+        ]
+    },
+    {
+        "id": "rag_build_prompt",
+        "type": "function",
+        "z": "8e4023b8523e3808",
+        "name": "Zbuduj Prompt dla LLM",
+        "func": "// Jeśli Qdrant nic nie znalazł, kończymy\nif (!msg.payload.result || msg.payload.result.length === 0) {\n    msg.payload = \"Brak danych w bazie Qdrant!\";\n    return msg;\n}\n\n// Wyciągamy nasz zapisany wcześniej \"bogatą narrację\" (lub JSON-a z danymi)\nlet contextData = msg.payload.result[0].payload.narrative;\n\n// ⚡ MAGIA RAG: Łączymy pytanie użytkownika z odzyskanym kontekstem z bazy!\nlet systemPrompt = `Jesteś ekspertem ds. jakości powietrza. Odpowiedz na pytanie użytkownika opierając się WYŁĄCZNIE na dostarczonym kontekście poniżej. Bądź zwięzły, pomocny i używaj języka polskiego.\\n\\nKONTEKST Z BAZY DANYCH:\\n${contextData}`;\n\nmsg.payload = {\n    \"model\": \"llama3\",\n    \"prompt\": systemPrompt + \"\\n\\nPYTANIE UŻYTKOWNIKA: \" + msg.question,\n    \"stream\": false\n};\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1270,
+        "y": 1060,
+        "wires": [
+            [
+                "rag_ask_llm"
+            ]
+        ]
+    },
+    {
+        "id": "rag_ask_llm",
+        "type": "http request",
+        "z": "8e4023b8523e3808",
+        "name": "Zapytaj Llama 3",
+        "method": "POST",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "http://ollama:11434/api/generate",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "authType": "",
+        "x": 1460,
+        "y": 1060,
+        "wires": [
+            [
+                "rag_final_answer"
+            ]
+        ]
+    },
+    {
+        "id": "rag_final_answer",
+        "type": "debug",
+        "z": "8e4023b8523e3808",
+        "name": "Odpowiedź Asystenta!",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload.response",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1660,
+        "y": 1060,
         "wires": []
     }
 ]
