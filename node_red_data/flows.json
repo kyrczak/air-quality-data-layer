@@ -8,6 +8,14 @@
         "env": []
     },
     {
+        "id": "aad307cca1567e82",
+        "type": "tab",
+        "label": "Flow 2",
+        "disabled": false,
+        "info": "",
+        "env": []
+    },
+    {
         "id": "68089472e32982a5",
         "type": "postgreSQLConfig",
         "name": "",
@@ -41,6 +49,30 @@
         "vhost": "",
         "tls": false,
         "credsFromSettings": false
+    },
+    {
+        "id": "d2cb4553d48ee984",
+        "type": "prometheus-metric-config",
+        "name": "ollama_embedding_duration_seconds",
+        "help": "Pomiar czas tworzeniea embeddingu",
+        "labels": "source",
+        "mtype": "gauge"
+    },
+    {
+        "id": "d763d00425b4a339",
+        "type": "prometheus-metric-config",
+        "name": "qdrant_search_duration_seconds",
+        "help": "Pomiar w sekundach odpytania bazy wektorowej",
+        "labels": "source",
+        "mtype": "gauge"
+    },
+    {
+        "id": "a9c36167ac10a33c",
+        "type": "prometheus-metric-config",
+        "name": "ollama_generation_duration_seconds",
+        "help": "ollama_generation_duration_seconds",
+        "labels": "source",
+        "mtype": "gauge"
     },
     {
         "id": "trigger_15min",
@@ -202,7 +234,7 @@
         "type": "debug",
         "z": "8e4023b8523e3808",
         "name": "Wynik (JSON)",
-        "active": false,
+        "active": true,
         "tosidebar": true,
         "console": false,
         "tostatus": false,
@@ -219,7 +251,7 @@
         "type": "function",
         "z": "8e4023b8523e3808",
         "name": "Parser: Airly -> SQL/Rabbit",
-        "func": "if (!msg.payload || !msg.payload.current) return null;\n\nlet current = msg.payload.current.values;\nlet forecast = msg.payload.forecast || [];\nlet stationId = msg.station_id || \"unknown\";\nlet timestamp = msg.payload.current.tillDateTime;\n\n// Wyciąganie bieżących wartości\nlet data = {};\ncurrent.forEach(v => {\n    data[v.name] = v.value;\n});\n\n// --- WYJŚCIE 1: Dla PostgreSQL (Tylko czyste fakty, bez prognoz) ---\nlet msgSQL = {\n    query: \"INSERT INTO airly_readings (station_id, measurement_time, pm1, pm25, pm10, temperature, humidity) VALUES ($1, $2, $3, $4, $5, $6, $7);\",\n    params: [\n        stationId,\n        timestamp,\n        data[\"PM1\"] || null,\n        data[\"PM25\"] || null,\n        data[\"PM10\"] || null,\n        data[\"TEMPERATURE\"] || null,\n        data[\"HUMIDITY\"] || null\n    ]\n};\n\n// --- WYJŚCIE 2: Dla RabbitMQ (Pełen kontekst dla systemu RAG) ---\nlet msgRabbit = {\n    payload: {\n        station: stationId,\n        time: timestamp,\n        current_values: data,    \n        forecast: forecast      \n    },\n    routingKey: \"telemetry.airly.station_\" + stationId\n};\n\nreturn [msgSQL, msgRabbit];",
+        "func": "if (!msg.payload || !msg.payload.current) return null;\n\nlet current = msg.payload.current.values;\nlet forecast = msg.payload.forecast || [];\nlet stationId = msg.station_id || \"unknown\";\nlet timestamp = msg.payload.current.tillDateTime;\n\n// Wyciąganie bieżących wartości\nlet data = {};\ncurrent.forEach(v => {\n    data[v.name] = v.value;\n});\n\nlet pm10_current = data[\"PM10\"] || 0;\nlet is_smog_alert = pm10_current > 50; // Prosty próg dla alertów\n\n// --- WYJŚCIE 1: Dla PostgreSQL (Bez zmian) ---\nlet msgSQL = {\n    query: \"INSERT INTO airly_readings (station_id, measurement_time, pm1, pm25, pm10, temperature, humidity) VALUES ($1, $2, $3, $4, $5, $6, $7);\",\n    params: [\n        stationId, timestamp, data[\"PM1\"] || null, data[\"PM25\"] || null, data[\"PM10\"] || null, data[\"TEMPERATURE\"] || null, data[\"HUMIDITY\"] || null\n    ]\n};\n\n// --- WYJŚCIE 2: Dla RabbitMQ (Podział na strumienie) ---\nlet rabbitMessages = [];\n\n// Strumień 1: Surowe dane (np. do przyszłych modeli ML)\nrabbitMessages.push({\n    payload: { station: stationId, time: timestamp, raw_readings: data },\n    routingKey: `telemetry.raw.station_${stationId}`\n});\n\n// Strumień 2: Historia dla systemu RAG\nrabbitMessages.push({\n    payload: { station: stationId, time: timestamp, current_values: data, record_type: \"historical\" },\n    routingKey: `telemetry.rag.historical.station_${stationId}`\n});\n\n// Strumień 3: Prognoza dla systemu RAG (tylko jeśli istnieje)\nif (forecast.length > 0) {\n    rabbitMessages.push({\n        payload: { station: stationId, time: timestamp, forecast: forecast, record_type: \"forecast\" },\n        routingKey: `telemetry.rag.forecast.station_${stationId}`\n    });\n}\n\n// Strumień 4: Szybkie alerty smogowe\nif (is_smog_alert) {\n    rabbitMessages.push({\n        payload: { station: stationId, time: timestamp, pm10: pm10_current, alert: \"Przekroczenie PM10!\" },\n        routingKey: `telemetry.alert.station_${stationId}`\n    });\n}\n\nreturn [msgSQL, rabbitMessages];",
         "outputs": 2,
         "timeout": "",
         "noerr": 0,
@@ -273,36 +305,6 @@
         "wires": []
     },
     {
-        "id": "mock_airly_data",
-        "type": "inject",
-        "z": "8e4023b8523e3808",
-        "name": "🔥 AWARYJNY INJECT (Mock API)",
-        "props": [
-            {
-                "p": "payload"
-            },
-            {
-                "p": "station_id",
-                "v": "99999",
-                "vt": "num"
-            }
-        ],
-        "repeat": "",
-        "crontab": "",
-        "once": false,
-        "onceDelay": 0.1,
-        "topic": "",
-        "payload": "{\"current\":{\"tillDateTime\":\"2026-04-19T22:00:00.000Z\",\"values\":[{\"name\":\"PM1\",\"value\":12.5},{\"name\":\"PM25\",\"value\":18.2},{\"name\":\"PM10\",\"value\":22.4},{\"name\":\"TEMPERATURE\",\"value\":8.5},{\"name\":\"HUMIDITY\",\"value\":65.0}]},\"forecast\":[{\"tillDateTime\":\"2026-04-20T00:00:00.000Z\",\"values\":[{\"name\":\"PM10\",\"value\":15.0}]}]}",
-        "payloadType": "json",
-        "x": 520,
-        "y": 780,
-        "wires": [
-            [
-                "parser_node"
-            ]
-        ]
-    },
-    {
         "id": "amqp_in_node",
         "type": "amqp-in",
         "z": "8e4023b8523e3808",
@@ -310,9 +312,9 @@
         "broker": "3537428dc4eb99d3",
         "prefetch": "1",
         "noAck": false,
-        "exchangeName": "",
+        "exchangeName": "sensor_data",
         "exchangeType": "topic",
-        "exchangeRoutingKey": "",
+        "exchangeRoutingKey": "telemetry.rag.#",
         "exchangeDurable": true,
         "queueName": "qdrant_vectorization_pipeline",
         "queueExclusive": false,
@@ -332,7 +334,7 @@
         "type": "function",
         "z": "8e4023b8523e3808",
         "name": "Przygotuj Tekst dla AI",
-        "func": "// 1. Zabezpieczenie formatu wejściowego\nlet data = typeof msg.payload === 'string' ? JSON.parse(msg.payload) : msg.payload;\nlet current = data.current_values || {};\nlet forecast = data.forecast || [];\nlet station = data.station || \"nieznana\";\nlet time = new Date(data.time).toLocaleString('pl-PL');\n\nlet pm10_current = current.PM10 || 0;\n\n// 2. KLASYFIKACJA (Tłumaczymy liczby na pojęcia dla LLM)\nlet status = \"\";\nlet health_advice = \"\";\n\nif (pm10_current <= 20) {\n    status = \"BARDZO DOBRY\";\n    health_advice = \"Są to idealne warunki do wietrzenia pomieszczeń oraz intensywnego biegania na zewnątrz.\";\n} else if (pm10_current <= 50) {\n    status = \"UMIARKOWANY\";\n    health_advice = \"Można krótko przewietrzyć pokój, ale zaleca się ograniczenie ciężkiego wysiłku fizycznego.\";\n} else {\n    status = \"ZŁY (SMOG)\";\n    health_advice = \"KATEGORYCZNY ZAKAZ wietrzenia mieszkań i uprawiania sportu na zewnątrz. Ryzyko dla zdrowia.\";\n}\n\n// 3. ANALIZA PROGNOZ (Szukamy najlepszego momentu)\nlet best_time = \"brak danych\";\nlet min_pm10 = 9999;\nlet trend = \"stabilny\";\n\nif (forecast.length > 0) {\n    // Przeszukujemy prognozę, by znaleźć godzinę z najniższym stężeniem pyłów\n    forecast.forEach(f => {\n        // Airly trzyma wartości w tablicy obiektów, szukamy PM10\n        let f_pm10_obj = f.values.find(v => v.name === \"PM10\");\n        if (f_pm10_obj && f_pm10_obj.value < min_pm10) {\n            min_pm10 = f_pm10_obj.value;\n            // Formatujemy czas prognozy na czytelny np. \"20:00\"\n            best_time = new Date(f.tillDateTime).toLocaleTimeString('pl-PL', {hour: '2-digit', minute:'2-digit'});\n        }\n    });\n    \n    // Obliczamy prosty trend (porównanie obecnego z najlepszym w przyszłości)\n    if (min_pm10 < (pm10_current - 5)) trend = \"POLEPSZAJĄCY (powietrze będzie czystsze)\";\n    else if (min_pm10 > (pm10_current + 5)) trend = \"POGARSZAJĄCY (idzie smog)\";\n}\n\n// 4. GENEROWANIE NARRACJI (To jest to, co przeczyta Nomic i Llama!)\nlet textPrompt = `Raport o jakości powietrza dla okolicy stacji ${station}. Stan na: ${time}. ` +\n                 `Obecny poziom pyłów PM10 wynosi ${pm10_current} µg/m³. ` +\n                 `Klasyfikacja: Stan powietrza jest ${status}. ${health_advice} ` +\n                 `Analiza trendu: Trend jakości powietrza jest ${trend}. ` +\n                 `Wnioski z prognozy: Najlepszy czas na przewietrzenie pokoju lub wyjście pobiegać to godzina ${best_time}, ` +\n                 `kiedy przewiduje się, że poziom PM10 spadnie do wartości ${min_pm10} µg/m³.`;\n\n// 5. Pakowanie do Qdranta i Ollamy\nmsg.airly_metadata = {\n       \"station\": station,\n       \"time\": time,\n       \"narrative\": textPrompt, \n       \"raw_data\": data\n};\nmsg.payload = {\n    \"model\": \"nomic-embed-text\",\n    \"prompt\": textPrompt\n};\n\nreturn msg;",
+        "func": "// 1. ZABEZPIECZENIE FORMATU WEJŚCIOWEGO\nlet data = typeof msg.payload === 'string' ? JSON.parse(msg.payload) : msg.payload;\nlet station = data.station || \"nieznana\";\nlet record_type = data.record_type || \"historical\"; // Z naszego parsera\n\n// 2. TWARDE METADANE CZASOWE\nlet dateObj = new Date(data.time);\nlet unix_timestamp = Math.floor(dateObj.getTime() / 1000); // Epoch \nlet date_string = dateObj.toISOString().split('T')[0];     // YYYY-MM-DD\nlet hour = dateObj.getHours();\n\nlet time_of_day = \"\";\nif (hour >= 6 && hour < 9) time_of_day = \"rano\";\nelse if (hour >= 9 && hour < 13) time_of_day = \"przedpołudnie\";\nelse if (hour >= 13 && hour < 17) time_of_day = \"popołudnie\";\nelse if (hour >= 17 && hour < 22) time_of_day = \"wieczór\";\nelse time_of_day = \"noc\";\n\n// 3. DETERMINISTYCZNE ID (Ochrona przed duplikatami)\n// Kombinacja stacja + data + godzina + typ_rekordu\nlet uniqueString = `${station}-${date_string}-${hour}-${record_type}`;\nlet hash = 0;\nfor (let i = 0; i < uniqueString.length; i++) {\n    hash = ((hash << 5) - hash) + uniqueString.charCodeAt(i);\n    hash |= 0; \n}\nlet hex = Math.abs(hash).toString(16).padStart(8, '0');\nlet deterministic_uuid = `${hex}-0000-4000-8000-000000000000`; // Format zgodny z UUID w Qdrant\n\n// 4. GENEROWANIE NARRACJI I TAGÓW ZALEŻNIE OD TYPU DANYCH\nlet textPrompt = \"\";\nlet suitability_tags = [];\nlet pm10_reference = 0;\nlet dayOfWeek = dateObj.toLocaleDateString('pl-PL', { weekday: 'long' });\n\nif (record_type === \"historical\") {\n    // --- OBRÓBKA DANYCH HISTORYCZNYCH/BIEŻĄCYCH ---\n    let current = data.current_values || {};\n    pm10_reference = current.PM10 || 0;\n    let pm25_current = current.PM25 || 0;\n    let status = \"\";\n    let health_impact = \"\";\n\n    if (pm10_reference <= 20) {\n        status = \"BARDZO DOBRY\";\n        suitability_tags = [\"sport_excellent\", \"ventilation_excellent\"];\n        health_impact = \"Powietrze jest rześkie. Idealne warunki do głębokiego oddychania na zewnątrz.\";\n    } else if (pm10_reference <= 50) {\n        status = \"UMIARKOWANY\";\n        suitability_tags = [\"sport_ok\", \"ventilation_ok\"];\n        health_impact = \"Powietrze akceptowalne. Osoby bardzo wrażliwe mogą odczuwać delikatny dyskomfort.\";\n    } else {\n        status = \"ZŁY (SMOG)\";\n        suitability_tags = [\"sport_unsuitable\", \"ventilation_unsuitable\", \"health_hazard\"];\n        health_impact = \"Wysokie stężenie pyłów. Oddychanie na zewnątrz może powodować duszności i kaszel.\";\n    }\n\n    textPrompt = `Zapis pomiarów: W ${dayOfWeek} ${time_of_day} (${date_string} godz. ${hour}:00), na stacji ${station}, ` +\n                 `odnotowano ${status} stan powietrza. PM10: ${pm10_reference} µg/m³. ` +\n                 `Wpływ na zdrowie: ${health_impact}`;\n\n} else if (record_type === \"forecast\") {\n    // --- OBRÓBKA PROGNOZY ---\n    let forecastArr = data.forecast || [];\n    let best_forecast_time = \"brak danych\";\n    pm10_reference = 9999; \n    let trend_narrative = \"\";\n\n    forecastArr.forEach(f => {\n        let f_pm10_obj = f.values.find(v => v.name === \"PM10\");\n        if (f_pm10_obj && f_pm10_obj.value < pm10_reference) {\n            pm10_reference = f_pm10_obj.value;\n            let fDate = new Date(f.tillDateTime);\n            best_forecast_time = `${fDate.getHours()}:00 (${fDate.toISOString().split('T')[0]})`;\n        }\n    });\n\n    if (pm10_reference <= 20) {\n        suitability_tags = [\"forecast_sport_excellent\", \"forecast_ventilation_excellent\"];\n        trend_narrative = `Najlepsze okno na aktywność fizyczną lub wietrzenie przewidywane jest na godzinę ${best_forecast_time}, gdy stężenie pyłów spadnie do idealnego poziomu ok. ${Math.round(pm10_reference)} µg/m³.`;\n    } else {\n        suitability_tags = [\"forecast_sport_poor\"];\n        trend_narrative = `Nie przewiduje się drastycznej poprawy. Najmniejsze zanieczyszczenie (ok. ${Math.round(pm10_reference)} µg/m³) wystąpi w okolicach ${best_forecast_time}. Warto wstrzymać się z długimi treningami.`;\n    }\n\n    textPrompt = `Analiza prognozy wygenerowana w ${dayOfWeek} ${time_of_day} dla okolicy stacji ${station}. Wnioski z prognozy: ${trend_narrative}`;\n}\n\n// 5. PAKOWANIE DO QDRANTA I OLLAMY\nmsg.airly_metadata = {\n       \"point_id\": deterministic_uuid, \n       \"station_id\": station.toString(),\n       \"timestamp\": unix_timestamp,\n       \"date_string\": date_string,\n       \"time_of_day\": time_of_day,\n       \"record_type\": record_type,\n       \"suitability_tags\": suitability_tags,\n       \"narrative\": textPrompt,\n       \"pm10_reference\": pm10_reference\n};\n\nmsg.payload = {\n    \"model\": \"nomic-embed-text\",\n    \"prompt\": textPrompt\n};\n\nreturn msg;",
         "outputs": 1,
         "timeout": "",
         "noerr": 0,
@@ -376,7 +378,7 @@
         "type": "function",
         "z": "8e4023b8523e3808",
         "name": "Przygotuj Paczkę (Qdrant)",
-        "func": "// Pobieramy wygenerowany wektor z odpowiedzi Ollamy\nlet vector = msg.payload.embedding;\n\n// Prosty generator unikalnego ID (UUID) dla punktu w bazie wektorowej\nfunction uuidv4() {\n  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {\n    var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);\n    return v.toString(16);\n  });\n}\n\n// Budujemy ostateczny payload dla bazy Qdrant\nmsg.payload = {\n    \"points\": [\n        {\n            \"id\": uuidv4(),\n            \"vector\": vector,\n            \"payload\": msg.airly_metadata // Zapisujemy oryginalny JSON jako metadane!\n        }\n    ]\n};\n\nreturn msg;",
+        "func": "// 1. Pobieramy wygenerowany wektor z odpowiedzi Ollamy (nomic-embed-text)\nlet vector = msg.payload.embedding;\n\n// 2. Pobieramy metadane przygotowane w węźle \"Przygotuj Tekst dla AI\"\nlet metadata = msg.airly_metadata;\n\n// 3. Budujemy ostateczny payload dla bazy Qdrant\n// API Qdranta /collections/{name}/points domyślnie wykonuje UPSERT (Insert or Update)\nmsg.payload = {\n    \"points\": [\n        {\n            \"id\": metadata.point_id, // Używamy wygenerowanego, deterministycznego UUID!\n            \"vector\": vector,\n            \"payload\": metadata      // Zapisujemy całą strukturę tagów i narracji\n        }\n    ]\n};\n\nreturn msg;",
         "outputs": 1,
         "timeout": "",
         "noerr": 0,
@@ -437,7 +439,7 @@
         "type": "debug",
         "z": "8e4023b8523e3808",
         "name": "debug 1",
-        "active": true,
+        "active": false,
         "tosidebar": true,
         "console": false,
         "tostatus": false,
@@ -450,14 +452,60 @@
         "wires": []
     },
     {
+        "id": "54dc602a2925293b",
+        "type": "amqp-in",
+        "z": "8e4023b8523e3808",
+        "name": "RabbitMQ archiwum data",
+        "broker": "3537428dc4eb99d3",
+        "prefetch": 0,
+        "noAck": true,
+        "exchangeName": "sensor_data",
+        "exchangeType": "topic",
+        "exchangeRoutingKey": "telemetry.raw.#",
+        "exchangeDurable": true,
+        "queueName": "raw_data_archive",
+        "queueExclusive": false,
+        "queueDurable": true,
+        "queueAutoDelete": false,
+        "headers": "{}",
+        "x": 310,
+        "y": 1140,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "5326be1344337ddf",
+        "type": "amqp-in",
+        "z": "8e4023b8523e3808",
+        "name": "RabbitMQ Alerty data",
+        "broker": "3537428dc4eb99d3",
+        "prefetch": 0,
+        "noAck": true,
+        "exchangeName": "sensor_data",
+        "exchangeType": "topic",
+        "exchangeRoutingKey": "telemetry.alert.#",
+        "exchangeDurable": true,
+        "queueName": "smog_alerts",
+        "queueExclusive": false,
+        "queueDurable": true,
+        "queueAutoDelete": false,
+        "headers": "{}",
+        "x": 300,
+        "y": 1220,
+        "wires": [
+            []
+        ]
+    },
+    {
         "id": "rag_inject",
         "type": "inject",
-        "z": "8e4023b8523e3808",
+        "z": "aad307cca1567e82",
         "name": "Zadaj Pytanie",
         "props": [
             {
                 "p": "question",
-                "v": "Kiedy dzisiaj najlepiej iść biegać?",
+                "v": "Jaki będzie stan powietrza w trakcie najbliższych 24 godzin?",
                 "vt": "str"
             }
         ],
@@ -466,8 +514,8 @@
         "once": false,
         "onceDelay": 0.1,
         "topic": "",
-        "x": 230,
-        "y": 1060,
+        "x": 250,
+        "y": 120,
         "wires": [
             [
                 "rag_prepare_embed"
@@ -477,22 +525,22 @@
     {
         "id": "rag_prepare_embed",
         "type": "function",
-        "z": "8e4023b8523e3808",
+        "z": "aad307cca1567e82",
         "name": "Przygotuj do Wektoryzacji",
         "func": "// Bierzemy pytanie i zlecamy Ollamie zamianę go na wektor\nmsg.payload = {\n    \"model\": \"nomic-embed-text\",\n    \"prompt\": msg.question\n};\nreturn msg;",
         "outputs": 1,
-        "x": 430,
-        "y": 1060,
+        "x": 570,
+        "y": 120,
         "wires": [
             [
-                "rag_embed_question"
+                "184f38c8a68f516a"
             ]
         ]
     },
     {
         "id": "rag_embed_question",
         "type": "http request",
-        "z": "8e4023b8523e3808",
+        "z": "aad307cca1567e82",
         "name": "Wektoryzuj Pytanie",
         "method": "POST",
         "ret": "obj",
@@ -502,34 +550,40 @@
         "persist": false,
         "proxy": "",
         "authType": "",
-        "x": 650,
-        "y": 1060,
+        "x": 350,
+        "y": 340,
         "wires": [
             [
-                "rag_prepare_search"
+                "rag_prepare_search",
+                "0d4ff37d35184a75"
             ]
         ]
     },
     {
         "id": "rag_prepare_search",
         "type": "function",
-        "z": "8e4023b8523e3808",
+        "z": "aad307cca1567e82",
         "name": "Sformułuj Zapytanie Qdrant",
-        "func": "// Bierzemy wektor naszego pytania i prosimy Qdranta o 1 najbardziej podobny wpis\nmsg.payload = {\n    \"vector\": msg.payload.embedding,\n    \"limit\": 1,\n    \"with_payload\": true\n};\nreturn msg;",
+        "func": "let vector = msg.payload.embedding;\nlet question = (msg.question || \"\").toLowerCase();\n\n// Inicjalizujemy pustą listę filtrów \"must\" (warunki konieczne dla bazy Qdrant)\nlet must_filters = [];\n\n// --- EKSTRAKCJA INTENCJI I FILTROWANIE HYBRYDOWE ---\n// W środowisku produkcyjnym takie filtry mógłby generować mniejszy model językowy (tzw. Query Router).\n// Na potrzeby testów implementujemy proste reguły oparte na słowach kluczowych.\n\n// 1. Typ rekordu (Historia vs Prognoza)\nif (question.includes(\"jutro\") || question.includes(\"kiedy\") || question.includes(\"będzie\")) {\n    must_filters.push({\n        \"key\": \"record_type\",\n        \"match\": { \"value\": \"forecast\" }\n    });\n} else if (question.includes(\"wczoraj\") || question.includes(\"było\")) {\n    must_filters.push({\n        \"key\": \"record_type\",\n        \"match\": { \"value\": \"historical\" }\n    });\n}\n\n// 2. Filtr czasowy \"wczoraj\" (Hard filter - Qdrant odrzuci wektory z innych dni)\nif (question.includes(\"wczoraj\")) {\n    let yesterday = new Date();\n    yesterday.setDate(yesterday.getDate() - 1);\n    let dateString = yesterday.toISOString().split('T')[0]; \n    \n    must_filters.push({ \n        \"key\": \"date_string\", \n        \"match\": { \"value\": dateString } \n    });\n}\n\n// 3. Filtr pory dnia\nif (question.includes(\"wieczór\") || question.includes(\"wieczorem\")) {\n    must_filters.push({ \n        \"key\": \"time_of_day\", \n        \"match\": { \"value\": \"wieczór\" } \n    });\n}\n\n// --- BUDOWA ZAPYTANIA HYBRYDOWEGO ---\nlet qdrant_payload = {\n    \"vector\": vector,\n    \"limit\": 3, // Pobieramy 3 najlepsze konteksty (a nie 1), by LLM miał szerszy obraz\n    \"with_payload\": true\n};\n\n// Jeśli wykryliśmy jakiekolwiek filtry, dodajemy je do zapytania Qdranta\nif (must_filters.length > 0) {\n    qdrant_payload.filter = {\n        \"must\": must_filters\n    };\n}\n\nmsg.payload = qdrant_payload;\nreturn msg;",
         "outputs": 1,
-        "x": 860,
-        "y": 1060,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 900,
+        "y": 340,
         "wires": [
             [
-                "rag_search_qdrant"
+                "f0556ee7e175425f"
             ]
         ]
     },
     {
         "id": "rag_search_qdrant",
         "type": "http request",
-        "z": "8e4023b8523e3808",
-        "name": "Szukaj w Bazie",
+        "z": "aad307cca1567e82",
+        "name": "Szukaj w Bazie (qdrant)",
         "method": "POST",
         "ret": "obj",
         "paytoqs": "ignore",
@@ -537,39 +591,43 @@
         "tls": "",
         "persist": false,
         "proxy": "",
+        "insecureHTTPParser": false,
         "authType": "",
-        "x": 1060,
-        "y": 1060,
+        "senderr": false,
+        "headers": [],
+        "x": 1250,
+        "y": 340,
         "wires": [
             [
-                "rag_build_prompt"
+                "f53155c39bde1d3a",
+                "63975b9e0237cdf3"
             ]
         ]
     },
     {
         "id": "rag_build_prompt",
         "type": "function",
-        "z": "8e4023b8523e3808",
+        "z": "aad307cca1567e82",
         "name": "Zbuduj Prompt dla LLM",
-        "func": "// Jeśli Qdrant nic nie znalazł, kończymy\nif (!msg.payload.result || msg.payload.result.length === 0) {\n    msg.payload = \"Brak danych w bazie Qdrant!\";\n    return msg;\n}\n\n// Wyciągamy nasz zapisany wcześniej \"bogatą narrację\" (lub JSON-a z danymi)\nlet contextData = msg.payload.result[0].payload.narrative;\n\n// ⚡ MAGIA RAG: Łączymy pytanie użytkownika z odzyskanym kontekstem z bazy!\nlet systemPrompt = `Jesteś ekspertem ds. jakości powietrza. Odpowiedz na pytanie użytkownika opierając się WYŁĄCZNIE na dostarczonym kontekście poniżej. Bądź zwięzły, pomocny i używaj języka polskiego.\\n\\nKONTEKST Z BAZY DANYCH:\\n${contextData}`;\n\nmsg.payload = {\n    \"model\": \"llama3\",\n    \"prompt\": systemPrompt + \"\\n\\nPYTANIE UŻYTKOWNIKA: \" + msg.question,\n    \"stream\": false\n};\nreturn msg;",
+        "func": "let qdrantData = msg.qdrant_context;\nlet sqlData = msg.payload; // Wynik z węzła PostgreSQL\n\n// 1. Formatowanie danych wektorowych (Semantyka i Prognozy)\nlet contextText = \"Brak danych semantycznych z bazy Qdrant.\";\nif (qdrantData && qdrantData.length > 0) {\n    contextText = qdrantData.map(r => r.payload.narrative).join(\"\\n---\\n\");\n}\n\n// 2. Formatowanie danych relacyjnych (Twarde fakty z PostgreSQL)\nlet sqlText = \"Brak dokładnych danych SQL.\";\nif (sqlData && Array.isArray(sqlData)) {\n    // Formatujemy tablicę JSON do ładnego tekstu\n    sqlText = sqlData.map(row => JSON.stringify(row)).join(\"\\n\");\n}\n\n// 3. MAGIA HYBRYDOWEGO RAG: Łączenie źródeł\nlet systemPrompt = `Jesteś ekspertem ds. jakości powietrza. Odpowiadasz na pytanie użytkownika na podstawie dwóch źródeł danych.\n\n[ŹRÓDŁO 1: BAZA WIEDZY I PROGNOZY (Kontekst semantyczny Qdrant)]\n${contextText}\n\n[ŹRÓDŁO 2: TWARDE DANE Z CZUJNIKÓW (Odczyty i agregacje z PostgreSQL)]\n${sqlText}\n\nINSTRUKCJE DLA CIEBIE:\n1. Używaj języka polskiego, bądź pomocny i naturalny.\n2. Jeśli pytanie dotyczy konkretnych wartości historycznych (np. \"jaka była temperatura\", \"najwyższe zapylenie\"), zawsze traktuj dane z [ŹRÓDŁO 2] jako ostateczną prawdę absolutną.\n3. Jeśli pytanie dotyczy prognoz lub zaleceń (np. \"czy iść biegać jutro\"), bazuj na narracjach z [ŹRÓDŁO 1].\n4. Jesteś precyzyjnym asystentem jakości powietrza.\n5. Odpowiadaj bezpośrednio i jednoznacznie w 1-2 zdaniach. Od razu podawaj wynik.\n6. Nigdy nie używaj zwrotów powitalnych ani pożegnalnych (np. 'Witaj', 'Zwracam się do Ciebie', 'Czas na decyzję').\n7. Nigdy nie podawaj technicznych numerów stacji (np. 86755) ani nie odwołuj się do słowa [ŹRÓDŁO]. Zamiast tego mów 'w Twojej okolicy'.\n`;\n\nmsg.payload = {\n    \"model\": \"llama3\",\n    \"prompt\": systemPrompt + \"\\n\\nPYTANIE UŻYTKOWNIKA: \" + msg.question,\n    \"stream\": false\n};\n\nreturn msg;",
         "outputs": 1,
         "timeout": "",
         "noerr": 0,
         "initialize": "",
         "finalize": "",
         "libs": [],
-        "x": 1270,
-        "y": 1060,
+        "x": 1650,
+        "y": 360,
         "wires": [
             [
-                "rag_ask_llm"
+                "6b07aab369f48d7a"
             ]
         ]
     },
     {
         "id": "rag_ask_llm",
         "type": "http request",
-        "z": "8e4023b8523e3808",
+        "z": "aad307cca1567e82",
         "name": "Zapytaj Llama 3",
         "method": "POST",
         "ret": "obj",
@@ -579,18 +637,19 @@
         "persist": false,
         "proxy": "",
         "authType": "",
-        "x": 1460,
-        "y": 1060,
+        "x": 1980,
+        "y": 280,
         "wires": [
             [
-                "rag_final_answer"
+                "rag_final_answer",
+                "3d082deba2d5a2c0"
             ]
         ]
     },
     {
         "id": "rag_final_answer",
         "type": "debug",
-        "z": "8e4023b8523e3808",
+        "z": "aad307cca1567e82",
         "name": "Odpowiedź Asystenta!",
         "active": true,
         "tosidebar": true,
@@ -600,8 +659,217 @@
         "targetType": "msg",
         "statusVal": "",
         "statusType": "auto",
-        "x": 1660,
-        "y": 1060,
+        "x": 2000,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "f53155c39bde1d3a",
+        "type": "function",
+        "z": "aad307cca1567e82",
+        "name": "Zapisz Qdrant i Zbuduj SQL",
+        "func": "// 1. Zapisujemy wyniki z Qdranta w innej zmiennej, \n// ponieważ węzeł Postgres nadpisze nam 'msg.payload'\nmsg.qdrant_context = msg.payload.result;\n\nlet question = (msg.question || \"\").toLowerCase();\nlet sqlQuery = \"\";\n\n// 2. Prosty Text-to-SQL (Tłumaczenie intencji na SQL)\n// (W środowisku produkcyjnym ten krok wykonuje mniejszy model LLM agenta bazodanowego)\nif (question.includes(\"wczoraj\") || question.includes(\"było\")) {\n    // Agregacja twardych danych z wczoraj\n    sqlQuery = \"SELECT MAX(pm10) as max_pm10, MIN(pm10) as min_pm10, ROUND(AVG(temperature)::numeric, 1) as avg_temp FROM airly_readings WHERE measurement_time >= current_date - interval '1 day' AND measurement_time < current_date;\";\n} else {\n    // Domyślnie: najnowsze czyste fakty dla kontekstu bieżącego\n    sqlQuery = \"SELECT pm10, pm25, temperature, humidity, measurement_time FROM airly_readings ORDER BY measurement_time DESC LIMIT 3;\";\n}\n\n// 3. Węzeł PostgreSQL wymaga zapytania w 'msg.payload.query' lub 'msg.payload'\nmsg.payload = {\n    query: sqlQuery\n};\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1240,
+        "y": 160,
+        "wires": [
+            [
+                "43b1e445d2d1ceb6"
+            ]
+        ]
+    },
+    {
+        "id": "43b1e445d2d1ceb6",
+        "type": "postgresql",
+        "z": "aad307cca1567e82",
+        "name": "Odczyt z bazy PostgreSQL",
+        "query": "",
+        "postgreSQLConfig": "68089472e32982a5",
+        "split": false,
+        "rowsPerMsg": 1,
+        "outputs": 1,
+        "x": 1560,
+        "y": 120,
+        "wires": [
+            [
+                "rag_build_prompt"
+            ]
+        ]
+    },
+    {
+        "id": "184f38c8a68f516a",
+        "type": "change",
+        "z": "aad307cca1567e82",
+        "name": "Rozpoczęcie odczytu czasu dla wektoryzacji",
+        "rules": [
+            {
+                "t": "set",
+                "p": "startTime",
+                "pt": "msg",
+                "to": "$millis()",
+                "tot": "jsonata"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 430,
+        "y": 220,
+        "wires": [
+            [
+                "rag_embed_question"
+            ]
+        ]
+    },
+    {
+        "id": "0d4ff37d35184a75",
+        "type": "function",
+        "z": "aad307cca1567e82",
+        "name": "Zakończenie odczytu czasu",
+        "func": "if (!msg.startTime) {\n    node.error(\"Brak msg.startTime!\");\n    return null;\n}\n\nlet start = Number(msg.startTime); \nlet latencyMs = Date.now() - start;\nlet seconds = Number((latencyMs / 1000).toFixed(4));\n\n// Tworzymy czystą, nową wiadomość dla węzła Prometheus\nlet newMsg = {};\n\n// Pakujemy wartość, operację i etykiety bezpośrednio w payload\nnewMsg.payload = {\n    val: seconds,\n    op: \"set\",\n    labels: { source: \"node-red_rag\" }\n};\n\nreturn newMsg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 360,
+        "y": 540,
+        "wires": [
+            [
+                "098002d3419b3716"
+            ]
+        ]
+    },
+    {
+        "id": "098002d3419b3716",
+        "type": "prometheus-exporter",
+        "z": "aad307cca1567e82",
+        "name": "ollama_embedding_duration_seconds",
+        "metric": "d2cb4553d48ee984",
+        "x": 370,
+        "y": 720,
+        "wires": []
+    },
+    {
+        "id": "f0556ee7e175425f",
+        "type": "change",
+        "z": "aad307cca1567e82",
+        "name": "Rozpoczęcie odczytu czasu dla odpytania bazy wektorowej",
+        "rules": [
+            {
+                "t": "set",
+                "p": "startTime",
+                "pt": "msg",
+                "to": "$millis()",
+                "tot": "jsonata"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 960,
+        "y": 460,
+        "wires": [
+            [
+                "rag_search_qdrant"
+            ]
+        ]
+    },
+    {
+        "id": "63975b9e0237cdf3",
+        "type": "function",
+        "z": "aad307cca1567e82",
+        "name": "Zakończenie odczytu czasu",
+        "func": "if (!msg.startTime) {\n    node.error(\"Brak msg.startTime!\");\n    return null;\n}\n\nlet start = Number(msg.startTime); \nlet latencyMs = Date.now() - start;\nlet seconds = Number((latencyMs / 1000).toFixed(4));\n\n// Tworzymy czystą, nową wiadomość dla węzła Prometheus\nlet newMsg = {};\n\n// Pakujemy wartość, operację i etykiety bezpośrednio w payload\nnewMsg.payload = {\n    val: seconds,\n    op: \"set\",\n    labels: { source: \"node-red_rag\" }\n};\n\nreturn newMsg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1180,
+        "y": 620,
+        "wires": [
+            [
+                "9986334316f0861d"
+            ]
+        ]
+    },
+    {
+        "id": "9986334316f0861d",
+        "type": "prometheus-exporter",
+        "z": "aad307cca1567e82",
+        "name": "qdrant_search_duration_seconds",
+        "metric": "d763d00425b4a339",
+        "x": 1160,
+        "y": 740,
+        "wires": []
+    },
+    {
+        "id": "6b07aab369f48d7a",
+        "type": "change",
+        "z": "aad307cca1567e82",
+        "name": "Rozpoczęcie odczytu czasu dla wygenerowanie odpowiedzi LLM",
+        "rules": [
+            {
+                "t": "set",
+                "p": "startTime",
+                "pt": "msg",
+                "to": "$millis()",
+                "tot": "jsonata"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 1590,
+        "y": 500,
+        "wires": [
+            [
+                "rag_ask_llm"
+            ]
+        ]
+    },
+    {
+        "id": "3d082deba2d5a2c0",
+        "type": "function",
+        "z": "aad307cca1567e82",
+        "name": "Zakończenie odczytu czasu",
+        "func": "if (!msg.startTime) {\n    node.error(\"Brak msg.startTime!\");\n    return null;\n}\n\nlet start = Number(msg.startTime); \nlet latencyMs = Date.now() - start;\nlet seconds = Number((latencyMs / 1000).toFixed(4));\n\n// Tworzymy czystą, nową wiadomość dla węzła Prometheus\nlet newMsg = {};\n\n// Pakujemy wartość, operację i etykiety bezpośrednio w payload\nnewMsg.payload = {\n    val: seconds,\n    op: \"set\",\n    labels: { source: \"node-red_rag\" }\n};\n\nreturn newMsg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 2000,
+        "y": 600,
+        "wires": [
+            [
+                "3f284fa7c0997aab"
+            ]
+        ]
+    },
+    {
+        "id": "3f284fa7c0997aab",
+        "type": "prometheus-exporter",
+        "z": "aad307cca1567e82",
+        "name": "ollama_generation_duration_seconds",
+        "metric": "a9c36167ac10a33c",
+        "x": 2050,
+        "y": 740,
         "wires": []
     }
 ]

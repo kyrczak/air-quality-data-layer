@@ -29,7 +29,7 @@ services:
     volumes:
       - ./qdrant_data:/qdrant/storage
     restart: unless-stopped
-  
+
   ollama:
     image: ollama/ollama:rocm
     container_name: ollama
@@ -41,6 +41,18 @@ services:
       - /dev/kfd:/dev/kfd
       - /dev/dri:/dev/dri
     restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
 
   node-red:
     image: nodered/node-red:latest

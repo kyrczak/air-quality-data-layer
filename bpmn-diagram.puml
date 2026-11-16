@@ -1,0 +1,89 @@
+@startuml
+skinparam backgroundColor white
+skinparam ActivityBackgroundColor #FEFECE
+skinparam ActivityBorderColor #A80036
+skinparam swimlaneBorderColor #444444
+skinparam swimlaneTitleBackgroundColor #E3F2FD
+
+|Użytkownik|
+|Airly|
+|RabbitMQ|
+|Node-RED|
+|PostgreSQL|
+|Qdrant|
+|Ollama (AI)|
+|Monitoring|
+
+' ==========================================
+' PROCES 1: CYKLICZNA INGESTIA DANYCH
+' ==========================================
+|Airly|
+start
+:Generowanie danych JSON (co 15 min);
+|Node-RED|
+:Pobranie JSON z API Airly;
+:Parser i routing;
+split
+   :Zapis twardych danych;
+   |PostgreSQL|
+   :INSERT do PostgreSQL;
+   kill
+split again
+   |Node-RED|
+   :Publikacja na Topic: sensor_data;
+   |RabbitMQ|
+   split
+      :Zapis [telemetry.raw];
+      kill
+   split again
+      :Wyslanie [telemetry.rag];
+      |Ollama (AI)|
+      :Wektoryzacja narracji (Nomic);
+      |Qdrant|
+      :UPSERT wektorów z metadanymi (Qdrant);
+      kill
+   end split
+end split
+
+' ==========================================
+' PROCES 2: OBSŁUGA ZAPYTANIA RAG
+' ==========================================
+|Użytkownik|
+start
+:Wysłanie zapytania tekstowego;
+|Node-RED|
+:Odebranie zapytania w Silniku RAG;
+|Ollama (AI)|
+:Wektoryzacja zapytania (Nomic);
+|Node-RED|
+split
+   :Zbudowanie zapytania SQL;
+   |PostgreSQL|
+   :Pobranie agregacji z PostgreSQL;
+split again
+   |Node-RED|
+   :Zbudowanie filtru Qdrant;
+   |Qdrant|
+   :Wyszukiwanie hybrydowe (Wektor + Tagi);
+end split
+|Node-RED|
+:Zbudowanie promptu z kontekstem (Baza + SQL);
+|Ollama (AI)|
+:Wygenerowanie odpowiedzi (Llama 3);
+|Node-RED|
+:Sformatowanie odpowiedzi;
+|Użytkownik|
+:Prezentacja wyniku;
+stop
+
+' ==========================================
+' PROCES 3: MONITOROWANIE
+' ==========================================
+|Monitoring|
+start
+:Skrapowanie endpointu /metrics (co 5s);
+:Rejestracja opóźnień (Gauge);
+:Wizualizacja wykresów na dashboardzie Grafana;
+stop
+
+@enduml

@@ -1,0 +1,65 @@
+@startuml
+!pragma teoz true
+left to right direction
+skinparam backgroundColor white
+skinparam padding 4
+skinparam componentStyle uml2
+
+' Definicje głównych stref systemu
+package "Zrodla Danych" {
+    rectangle "API Airly\n(Dane pogodowe)" as Airly #E3F2FD
+}
+
+package "Warstwa Akwizycji i Dystrybucji" {
+    rectangle "Node-RED\n[Parser i Ingestia]" as Ingest #FFF9C4
+    queue "RabbitMQ\n(Broker Wymiany)" as Broker #FFE0B2
+    queue "Archiwum\n[telemetry.raw]" as Q_Raw #F5F5F5
+    queue "RAG Pieline\n[telemetry.rag]" as Q_Rag #FFF3E0
+}
+
+package "Warstwa Magazynowania" {
+    database "PostgreSQL\n(Baza Relacyjna)" as SQL #E8F5E9
+    database "Qdrant\n(Baza Wektorowa)" as VectorDB #E1BEE7
+}
+
+package "Warstwa AI (Ollama)" {
+    rectangle "Model Nomic\n(Tworzenie Wektorow)" as Embedder #FCE4EC
+    rectangle "Model Llama 3\n(Generowanie Odpowiedzi)" as LLM #F8BBD0
+}
+
+package "Interakcja (RAG)" {
+    rectangle "Uzytkownik" as User #E0F7FA
+    rectangle "Node-RED\n[Silnik Zapytan RAG]" as RAG_Engine #FFF9C4
+}
+
+package "Ewaluacja" {
+    rectangle "Prometheus & Grafana" as Monitor #F1F8E9
+}
+
+' Ułożenie relacji - z lewej do prawej, bez zbędnych krzyżówek
+Airly --> Ingest : " Pobieranie JSON\n(co 15 min)"
+
+Ingest --> Broker : " Routing\nWiadomosci"
+Ingest --> SQL : " Zapis twardych\ndanych"
+
+Broker --> Q_Rag 
+Broker --> Q_Raw 
+
+Q_Rag --> Embedder : " Wektoryzacja\nnarracji"
+Embedder --> VectorDB : " Zapis z\nmetadanymi"
+
+User --> RAG_Engine : " Zapytanie textowe"
+RAG_Engine --> Embedder : " Wektoryzacja"
+RAG_Engine --> VectorDB : " Wyszukiwanie\nHybrydowe"
+RAG_Engine --> SQL : " Zapytanie SQL"
+
+RAG_Engine --> LLM : " Przeslanie Kontekstu\n(Baza + SQL)"
+LLM --> RAG_Engine : " Wygenerowanie\nodpowiedzi"
+RAG_Engine --> User : " Prezentacja\nwyniku"
+
+' Linie monitoringu (ukryte przed ukladaniem struktury by uniknąć splątania)
+Monitor .[#green].> Embedder : " Metryki"
+Monitor .[#green].> LLM : " Metryki"
+Monitor .[#green].> RAG_Engine : " Metryki"
+
+@enduml

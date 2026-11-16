@@ -6,6 +6,7 @@
     "dependencies": {
         "@meowwolf/node-red-contrib-amqp": "~2.4.2",
         "node-red-contrib-kafkajs": "~0.0.7",
-        "node-red-contrib-postgresql": "~0.15.4"
+        "node-red-contrib-postgresql": "~0.15.4",
+        "node-red-contrib-prometheus-exporter": "~1.0.5"
     }
 }
